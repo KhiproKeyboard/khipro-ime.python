@@ -159,6 +159,32 @@ AE: Dict[str, str] = {
 
 
 
+# --------------------------
+# Build group lookup
+# --------------------------
+
+GROUP_MAPS = {
+    "shor": SHOR,
+    "byanjon": BYANJON,
+    "juktoborno": JUKTOBORNO,
+    "reph": REPH,
+    "kar": KAR,
+    "ongko": ONGKO,
+    "diacritic": DIACRITIC,
+    "biram": BIRAM,
+    "prithayok": PRITHAYOK,
+    "ae": AE,
+}
+
+STATE_GROUP_ORDER = {
+    "init": ["shor","byanjon","juktoborno","reph","kar","ongko","diacritic","biram","prithayok","ae"],
+    "shor-state": ["shor","diacritic","kar","ae"],
+    "byanjon-state": ["byanjon","juktoborno","kar","diacritic"],
+    "reph-state": ["reph","byanjon","juktoborno","kar","ae","prithayok"],
+}
+
+MAXLEN_PER_GROUP = {g: max(len(k) for k in GROUP_MAPS[g]) for g in GROUP_MAPS}
+
 last_converted_length = 0  # For optimized buffer replacement
 
 # --------------------------
@@ -177,7 +203,6 @@ def _find_longest(state: str, text: str, i: int) -> Tuple[str, str, str]:
     return "", "", ""
 
 def _apply_transition(state: str, group: str) -> str:
-    # Same logic as before
     if state == "init":
         if group in ("diacritic", "shor"): return "shor-state"
         if group == "reph": return "reph-state"
@@ -226,7 +251,8 @@ def create_icon(letter: str, color=(0, 0, 0)) -> Image.Image:
     img = Image.new("RGB", (64, 64), (255, 255, 255))
     d = ImageDraw.Draw(img)
     try:
-        font = ImageFont.truetype("NotoSansBengali-Regular.ttf", 36)
+        font_path = getattr(sys, "_MEIPASS", ".") + "/NotoSansBengali-Regular.ttf"
+        font = ImageFont.truetype(font_path, 36)
     except:
         font = ImageFont.load_default()
     w, h = d.textsize(letter, font=font)
@@ -305,8 +331,6 @@ def tray_thread():
 # =========================
 
 if __name__ == "__main__":
-    # keyboard hook + tray icon
     keyboard.hook(on_key)
     threading.Thread(target=tray_thread, daemon=True).start()
-    # Wait indefinitely, no console output
     keyboard.wait()
