@@ -1,23 +1,25 @@
 # -*- coding: utf-8 -*-
 """
-Khipro IME for Windows
-----------------------
-Banglish → Bengali typing system.
-
+Khipro IME for Windows (Enhanced)
+---------------------------------
 Features:
-- Global keyboard hook (works in all apps).
-- Press F12 to toggle between Bengali and English typing.
-- Tray icon indicator (🅱 Bengali / 🔤 English).
-- Run once, stays active in background.
+- Global keyboard hook (works in all apps)
+- F12 toggles Bengali/English mode
+- Enter & Tab commit buffer without extra space
+- Proper backspace handling
+- System tray icon shows current mode
+- Optional: Run at startup
 """
 
-import keyboard
-import pyautogui
+import os
+import sys
 import time
 import threading
-from typing import Dict, List, Tuple
+from pathlib import Path
+from typing import Dict, Tuple
 from PIL import Image, ImageDraw
 import pystray
+import keyboard
 
 # --------------------------
 # Mapping groups (exactly as provided)
@@ -158,83 +160,79 @@ AE: Dict[str, str] = {
 }
 
 
-# ===========================
-# State machine config
-# ===========================
-
-INIT, SHOR_STATE, REPH_STATE, BYANJON_STATE = "init", "shor-state", "reph-state", "byanjon-state"
 GROUP_MAPS = {
     "shor": SHOR, "byanjon": BYANJON, "juktoborno": JUKTOBORNO,
     "reph": REPH, "phola": PHOLA, "kar": KAR, "ongko": ONGKO,
     "diacritic": DIACRITIC, "biram": BIRAM, "prithayok": PRITHAYOK, "ae": AE,
 }
+
 STATE_GROUP_ORDER = {
-    INIT: ["diacritic", "shor", "prithayok", "ongko", "biram", "reph", "juktoborno", "byanjon"],
-    SHOR_STATE: ["diacritic", "shor", "biram", "prithayok", "ongko", "reph", "juktoborno", "byanjon"],
-    REPH_STATE: ["prithayok", "ae", "juktoborno", "byanjon", "kar"],
-    BYANJON_STATE: ["diacritic", "prithayok", "ongko", "biram", "kar", "juktoborno", "phola", "byanjon"],
+    "init": ["diacritic", "shor", "prithayok", "ongko", "biram", "reph", "juktoborno", "byanjon"],
+    "shor-state": ["diacritic", "shor", "biram", "prithayok", "ongko", "reph", "juktoborno", "byanjon"],
+    "reph-state": ["prithayok", "ae", "juktoborno", "byanjon", "kar"],
+    "byanjon-state": ["diacritic", "prithayok", "ongko", "biram", "kar", "juktoborno", "phola", "byanjon"],
 }
-MAXLEN_PER_GROUP = {g: (max((len(k) for k in m.keys()), default=0)) for g, m in GROUP_MAPS.items()}
+
+MAXLEN_PER_GROUP = {g: max((len(k) for k in m.keys()), default=0) for g, m in GROUP_MAPS.items()}
 
 def _find_longest(state: str, text: str, i: int) -> Tuple[str, str, str]:
     allowed = STATE_GROUP_ORDER[state]
-    maxlen = 0
-    for g in allowed:
-        maxlen = max(maxlen, MAXLEN_PER_GROUP[g])
+    maxlen = max(MAXLEN_PER_GROUP[g] for g in allowed)
     end = min(len(text), i + maxlen)
     for L in range(end - i, 0, -1):
         chunk = text[i:i + L]
         for g in allowed:
             if chunk in GROUP_MAPS[g]:
-                return (g, chunk, GROUP_MAPS[g][chunk])
-    return ("", "", "")
+                return g, chunk, GROUP_MAPS[g][chunk]
+    return "", "", ""
 
 def _apply_transition(state: str, group: str) -> str:
-    if state == INIT:
-        if group in ("diacritic", "shor"): return SHOR_STATE
-        if group in ("prithayok", "ongko", "biram"): return INIT
-        if group == "reph": return REPH_STATE
-        if group in ("juktoborno", "byanjon"): return BYANJON_STATE
-    elif state == SHOR_STATE:
-        if group in ("diacritic", "shor"): return SHOR_STATE
-        if group in ("biram", "prithayok", "ongko"): return INIT
-        if group == "reph": return REPH_STATE
-        if group in ("juktoborno", "byanjon"): return BYANJON_STATE
-    elif state == REPH_STATE:
-        if group == "prithayok": return INIT
-        if group == "ae": return SHOR_STATE
-        if group in ("juktoborno", "byanjon"): return BYANJON_STATE
-        if group == "kar": return SHOR_STATE
-    elif state == BYANJON_STATE:
-        if group in ("diacritic", "kar"): return SHOR_STATE
-        if group in ("prithayok", "ongko", "biram"): return INIT
-        return BYANJON_STATE
+    if state == "init":
+        if group in ("diacritic", "shor"): return "shor-state"
+        if group == "reph": return "reph-state"
+        if group in ("juktoborno", "byanjon"): return "byanjon-state"
+        return "init"
+    elif state == "shor-state":
+        if group in ("diacritic", "shor"): return "shor-state"
+        if group == "reph": return "reph-state"
+        if group in ("juktoborno", "byanjon"): return "byanjon-state"
+        return "init"
+    elif state == "reph-state":
+        if group == "prithayok": return "init"
+        if group == "ae": return "shor-state"
+        if group in ("juktoborno", "byanjon"): return "byanjon-state"
+        if group == "kar": return "shor-state"
+    elif state == "byanjon-state":
+        if group in ("diacritic", "kar"): return "shor-state"
+        if group in ("prithayok", "ongko", "biram"): return "init"
+        return "byanjon-state"
     return state
 
 def convert(text: str) -> str:
-    i, n, state, out = 0, len(text), INIT, []
+    i, n, state, out = 0, len(text), "init", []
     while i < n:
         group, key, val = _find_longest(state, text, i)
         if not group:
-            out.append(text[i]); i += 1; state = INIT; continue
-        if state == BYANJON_STATE and group == "phola":
-            out.append("্"); out.append(val)
-        else:
-            out.append(val)
+            out.append(text[i])
+            i += 1
+            state = "init"
+            continue
+        out.append(val)
         i += len(key)
         state = _apply_transition(state, group)
     return "".join(out)
 
-# ===========================
-# IME logic + Tray icon
-# ===========================
+# =========================
+# IME logic
+# =========================
 
 bengali_mode = True
 buffer = ""
-icon = None  # tray icon object
+commit_keys = {"enter", "tab"}
+
+icon = None
 
 def create_icon(letter: str, color=(0, 0, 0)) -> Image.Image:
-    """Create a simple tray icon with text."""
     img = Image.new("RGB", (64, 64), (255, 255, 255))
     d = ImageDraw.Draw(img)
     d.text((20, 20), letter, fill=color)
@@ -244,10 +242,10 @@ def update_icon():
     global icon
     if icon:
         if bengali_mode:
-            icon.icon = create_icon("ব", (0, 0, 255))  # Blue Bengali ব
+            icon.icon = create_icon("ব", (0, 0, 255))
             icon.title = "Khipro IME - Bengali Mode"
         else:
-            icon.icon = create_icon("E", (255, 0, 0))  # Red English E
+            icon.icon = create_icon("E", (255, 0, 0))
             icon.title = "Khipro IME - English Mode"
 
 def toggle_mode():
@@ -256,14 +254,47 @@ def toggle_mode():
     buffer = ""
     update_icon()
 
+def commit_buffer():
+    global buffer
+    if buffer:
+        # delete previous buffer
+        for _ in range(len(buffer)):
+            keyboard.send("backspace")
+        keyboard.write(convert(buffer))
+        buffer = ""
+
 def on_key(event):
-    global buffer, bengali_mode
-    if not bengali_mode: return
-    if event.event_type == "down" and len(event.name) == 1:
-        buffer += event.name
-        keyboard.send("backspace")
-        bengali_text = convert(buffer)
-        pyautogui.typewrite(bengali_text)
+    global buffer
+    if event.event_type != "down":
+        return
+    name = event.name
+
+    if name == "f12":
+        toggle_mode()
+        return
+
+    if not bengali_mode:
+        return  # English mode
+
+    if name in commit_keys:
+        commit_buffer()
+        return
+
+    if name == "backspace":
+        if buffer:
+            buffer = buffer[:-1]
+        return
+
+    if len(name) == 1:
+        buffer += name
+        # delete previous buffer
+        for _ in range(len(buffer)-1):
+            keyboard.send("backspace")
+        keyboard.write(convert(buffer))
+
+# =========================
+# Tray icon thread
+# =========================
 
 def tray_thread():
     global icon
@@ -275,8 +306,34 @@ def tray_thread():
     update_icon()
     icon.run()
 
+# =========================
+# Startup shortcut creation
+# =========================
+
+def add_to_startup():
+    startup = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+    script_path = Path(sys.argv[0]).resolve()
+    shortcut_path = startup / f"Khipro IME.lnk"
+    if not shortcut_path.exists():
+        import pythoncom
+        from win32com.shell import shell, shellcon
+        import win32com.client
+        shell = win32com.client.Dispatch("WScript.Shell")
+        shortcut = shell.CreateShortCut(str(shortcut_path))
+        shortcut.Targetpath = sys.executable
+        shortcut.Arguments = f'"{script_path}"'
+        shortcut.WorkingDirectory = str(script_path.parent)
+        shortcut.IconLocation = str(script_path)
+        shortcut.save()
+
+# =========================
+# Main
+# =========================
+
 if __name__ == "__main__":
-    keyboard.add_hotkey("F12", toggle_mode)
+    # Uncomment next line to enable auto-start on first run
+    # add_to_startup()
+
     keyboard.hook(on_key)
     threading.Thread(target=tray_thread, daemon=True).start()
     print("✅ Khipro IME running... (Tray icon shows mode)")
