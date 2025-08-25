@@ -13,7 +13,6 @@ Khipro IME for Windows (Tray-only)
 import os
 import sys
 import threading
-from pathlib import Path
 from typing import Dict, Tuple
 from PIL import Image, ImageDraw, ImageFont
 import pystray
@@ -159,21 +158,17 @@ AE: Dict[str, str] = {
 
 
 
-# --------------------------
-# Build group lookup
-# --------------------------
-
-GROUP_MAPS = {
-    "shor": SHOR,
-    "byanjon": BYANJON,
-    "juktoborno": JUKTOBORNO,
-    "reph": REPH,
-    "kar": KAR,
-    "ongko": ONGKO,
-    "diacritic": DIACRITIC,
-    "biram": BIRAM,
-    "prithayok": PRITHAYOK,
-    "ae": AE,
+GROUP_MAPS: Dict[str, Dict[str, str]] = {
+    # "shor": SHOR,
+    # "byanjon": BYANJON,
+    # "juktoborno": JUKTOBORNO,
+    # "reph": REPH,
+    # "kar": KAR,
+    # "ongko": ONGKO,
+    # "diacritic": DIACRITIC,
+    # "biram": BIRAM,
+    # "prithayok": PRITHAYOK,
+    # "ae": AE,
 }
 
 STATE_GROUP_ORDER = {
@@ -183,7 +178,8 @@ STATE_GROUP_ORDER = {
     "reph-state": ["reph","byanjon","juktoborno","kar","ae","prithayok"],
 }
 
-MAXLEN_PER_GROUP = {g: max(len(k) for k in GROUP_MAPS[g]) for g in GROUP_MAPS}
+# Compute maximum key length per group dynamically
+MAXLEN_PER_GROUP = {g: max((len(k) for k in GROUP_MAPS.get(g, [""])), default=1) for g in GROUP_MAPS}
 
 last_converted_length = 0  # For optimized buffer replacement
 
@@ -192,13 +188,15 @@ last_converted_length = 0  # For optimized buffer replacement
 # --------------------------
 
 def _find_longest(state: str, text: str, i: int) -> Tuple[str, str, str]:
-    allowed = STATE_GROUP_ORDER[state]
-    maxlen = max(MAXLEN_PER_GROUP[g] for g in allowed)
+    allowed = STATE_GROUP_ORDER.get(state, [])
+    if not allowed:
+        return "", "", ""
+    maxlen = max(MAXLEN_PER_GROUP.get(g, 1) for g in allowed)
     end = min(len(text), i + maxlen)
     for L in range(end - i, 0, -1):
         chunk = text[i:i + L]
         for g in allowed:
-            if chunk in GROUP_MAPS[g]:
+            if chunk in GROUP_MAPS.get(g, {}):
                 return g, chunk, GROUP_MAPS[g][chunk]
     return "", "", ""
 
@@ -302,7 +300,7 @@ def on_key(event):
         if buffer:
             buffer = buffer[:-1]
             keyboard.send("backspace")
-            last_converted_length -= 1
+            last_converted_length = max(last_converted_length - 1, 0)
         return
     if len(name) == 1:
         buffer += name
