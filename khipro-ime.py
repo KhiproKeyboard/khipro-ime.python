@@ -1,19 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-Khipro IME for Windows (Enhanced)
----------------------------------
-Features:
-- Global keyboard hook (works in all apps)
+Khipro IME for Windows (Tray-only)
+----------------------------------
+- No console window
+- Global keyboard hook
 - F12 toggles Bengali/English mode
-- Enter & Tab commit buffer without extra space
+- Enter & Tab commit buffer
 - Proper backspace handling
-- System tray icon shows current mode
-- Optional: Run at startup
+- Tray icon shows current mode
 """
 
 import os
 import sys
-import time
 import threading
 from pathlib import Path
 from typing import Dict, Tuple
@@ -161,20 +159,11 @@ AE: Dict[str, str] = {
 
 
 
-GROUP_MAPS = {
-    "shor": SHOR, "byanjon": BYANJON, "juktoborno": JUKTOBORNO,
-    "reph": REPH, "phola": PHOLA, "kar": KAR, "ongko": ONGKO,
-    "diacritic": DIACRITIC, "biram": BIRAM, "prithayok": PRITHAYOK, "ae": AE,
-}
+last_converted_length = 0  # For optimized buffer replacement
 
-STATE_GROUP_ORDER = {
-    "init": ["diacritic", "shor", "prithayok", "ongko", "biram", "reph", "juktoborno", "byanjon"],
-    "shor-state": ["diacritic", "shor", "biram", "prithayok", "ongko", "reph", "juktoborno", "byanjon"],
-    "reph-state": ["prithayok", "ae", "juktoborno", "byanjon", "kar"],
-    "byanjon-state": ["diacritic", "prithayok", "ongko", "biram", "kar", "juktoborno", "phola", "byanjon"],
-}
-
-MAXLEN_PER_GROUP = {g: max((len(k) for k in m.keys()), default=0) for g, m in GROUP_MAPS.items()}
+# --------------------------
+# Conversion functions
+# --------------------------
 
 def _find_longest(state: str, text: str, i: int) -> Tuple[str, str, str]:
     allowed = STATE_GROUP_ORDER[state]
@@ -188,6 +177,7 @@ def _find_longest(state: str, text: str, i: int) -> Tuple[str, str, str]:
     return "", "", ""
 
 def _apply_transition(state: str, group: str) -> str:
+    # Same logic as before
     if state == "init":
         if group in ("diacritic", "shor"): return "shor-state"
         if group == "reph": return "reph-state"
@@ -230,14 +220,13 @@ def convert(text: str) -> str:
 bengali_mode = True
 buffer = ""
 commit_keys = {"enter", "tab"}
-
 icon = None
 
 def create_icon(letter: str, color=(0, 0, 0)) -> Image.Image:
     img = Image.new("RGB", (64, 64), (255, 255, 255))
     d = ImageDraw.Draw(img)
     try:
-        font = ImageFont.truetype("arial.ttf", 36)
+        font = ImageFont.truetype("NotoSansBengali-Regular.ttf", 36)
     except:
         font = ImageFont.load_default()
     w, h = d.textsize(letter, font=font)
@@ -255,46 +244,47 @@ def update_icon():
             icon.title = "Khipro IME - English Mode"
 
 def toggle_mode():
-    global bengali_mode, buffer
+    global bengali_mode, buffer, last_converted_length
     bengali_mode = not bengali_mode
     buffer = ""
+    last_converted_length = 0
     update_icon()
 
 def commit_buffer():
-    global buffer
+    global buffer, last_converted_length
     if buffer:
-        for _ in range(len(buffer)):
+        for _ in range(last_converted_length):
             keyboard.send("backspace")
         keyboard.write(convert(buffer))
         buffer = ""
+        last_converted_length = 0
 
 def on_key(event):
-    global buffer
+    global buffer, last_converted_length
     if event.event_type != "down":
         return
     name = event.name
-
     if name == "f12":
         toggle_mode()
         return
-
     if not bengali_mode:
         return
-
     if name in commit_keys:
         commit_buffer()
         return
-
     if name == "backspace":
         if buffer:
             buffer = buffer[:-1]
+            keyboard.send("backspace")
+            last_converted_length -= 1
         return
-
     if len(name) == 1:
         buffer += name
-        for _ in range(len(buffer)-1):
+        converted = convert(buffer)
+        for _ in range(last_converted_length):
             keyboard.send("backspace")
-        keyboard.write(convert(buffer))
+        keyboard.write(converted)
+        last_converted_length = len(converted)
 
 # =========================
 # Tray icon thread
@@ -311,35 +301,12 @@ def tray_thread():
     icon.run()
 
 # =========================
-# Startup shortcut creation
-# =========================
-
-def add_to_startup():
-    startup = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
-    script_path = Path(sys.argv[0]).resolve()
-    shortcut_path = startup / f"Khipro IME.lnk"
-    if not shortcut_path.exists():
-        import pythoncom
-        from win32com.shell import shell, shellcon
-        import win32com.client
-        shell = win32com.client.Dispatch("WScript.Shell")
-        shortcut = shell.CreateShortCut(str(shortcut_path))
-        shortcut.Targetpath = sys.executable
-        shortcut.Arguments = f'"{script_path}"'
-        shortcut.WorkingDirectory = str(script_path.parent)
-        shortcut.IconLocation = str(script_path)
-        shortcut.save()
-
-# =========================
 # Main
 # =========================
 
 if __name__ == "__main__":
-    # Uncomment next line to enable auto-start on first run
-    # add_to_startup()
-
+    # keyboard hook + tray icon
     keyboard.hook(on_key)
     threading.Thread(target=tray_thread, daemon=True).start()
-    print("✅ Khipro IME running... (Tray icon shows mode)")
-    while True:
-        time.sleep(1)
+    # Wait indefinitely, no console output
+    keyboard.wait()
