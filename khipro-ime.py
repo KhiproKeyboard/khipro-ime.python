@@ -17,7 +17,7 @@ import time
 import threading
 from pathlib import Path
 from typing import Dict, Tuple
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 import pystray
 import keyboard
 
@@ -160,6 +160,7 @@ AE: Dict[str, str] = {
 }
 
 
+
 GROUP_MAPS = {
     "shor": SHOR, "byanjon": BYANJON, "juktoborno": JUKTOBORNO,
     "reph": REPH, "phola": PHOLA, "kar": KAR, "ongko": ONGKO,
@@ -235,7 +236,12 @@ icon = None
 def create_icon(letter: str, color=(0, 0, 0)) -> Image.Image:
     img = Image.new("RGB", (64, 64), (255, 255, 255))
     d = ImageDraw.Draw(img)
-    d.text((20, 20), letter, fill=color)
+    try:
+        font = ImageFont.truetype("arial.ttf", 36)
+    except:
+        font = ImageFont.load_default()
+    w, h = d.textsize(letter, font=font)
+    d.text(((64 - w) / 2, (64 - h) / 2), letter, fill=color, font=font)
     return img
 
 def update_icon():
@@ -257,7 +263,6 @@ def toggle_mode():
 def commit_buffer():
     global buffer
     if buffer:
-        # delete previous buffer
         for _ in range(len(buffer)):
             keyboard.send("backspace")
         keyboard.write(convert(buffer))
@@ -274,7 +279,7 @@ def on_key(event):
         return
 
     if not bengali_mode:
-        return  # English mode
+        return
 
     if name in commit_keys:
         commit_buffer()
@@ -287,7 +292,6 @@ def on_key(event):
 
     if len(name) == 1:
         buffer += name
-        # delete previous buffer
         for _ in range(len(buffer)-1):
             keyboard.send("backspace")
         keyboard.write(convert(buffer))
