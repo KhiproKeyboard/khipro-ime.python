@@ -1,25 +1,28 @@
 # -*- coding: utf-8 -*-
-"""
-Khipro IME for Windows (Tray-only)
-----------------------------------
-- No console window
-- Global keyboard hook
-- F12 toggles Bengali/English mode
-- Enter & Tab commit buffer
-- Proper backspace handling
-- Tray icon shows current mode
-"""
-
 import os
 import sys
+import json
 import threading
-from typing import Dict, Tuple
-from PIL import Image, ImageDraw, ImageFont
+import winshell
+from pathlib import Path
+from typing import Dict, List, Tuple, Generator
+from win32com.client import Dispatch
+import ctypes
+from ctypes import wintypes
+import win32con
+import win32api
+import win32gui
+import time
+
+# For system tray
 import pystray
-import keyboard
+from PIL import Image, ImageDraw
+
+# For keyboard hook
+from pynput import keyboard
 
 # --------------------------
-# Mapping groups (exactly as provided)
+# Khipro Mapping groups (exactly as provided)
 # --------------------------
 
 SHOR: Dict[str, str] = {
@@ -46,8 +49,8 @@ SHOR: Dict[str, str] = {
 }
 
 BYANJON: Dict[str, str] = {
-    "k": "ক", "kh": "খ", "g": "গ", "gh": "ঘ", "ngf": "ঙ",
-    "c": "চ", "ch": "ছ", "j": "জ", "jh": "ঝ", "nff": "ঞ",
+    "k": "ক", "kh": "খ", "g": "গ", "gh": "ঘ",
+    "c": "च", "ch": "ছ", "j": "জ", "jh": "ঝ", "nff": "ঞ",
     "tf": "ট", "tff": "ঠ", "tfh": "ঠ", "df": "ড", "dff": "ঢ", "dfh": "ঢ", "nf": "ণ",
     "t": "ত", "th": "থ", "d": "দ", "dh": "ধ", "n": "ন",
     "p": "প", "ph": "ফ", "b": "ব", "v": "ভ", "m": "ম",
@@ -69,9 +72,9 @@ JUKTOBORNO: Dict[str, str] = {
     "cc": "চ্চ", "cch": "চ্ছ", "cchb": "চ্ছ্ব", "cchr": "চ্ছ্র", "cnff": "চ্ঞ", "cb": "চ্ব", "cz": "চ্য",
     "jj": "জ্জ", "jjb": "জ্জ্ব", "jjh": "জ্ঝ", "jnff": "জ্ঞ", "gg": "জ্ঞ", "jb": "জ্ব", "jz": "জ্য", "jr": "জ্র",
     "nc": "ঞ্চ", "nffc": "ঞ্চ", "nj": "ঞ্জ", "nffj": "ঞ্জ", "njh": "ঞ্ঝ", "nffjh": "ঞ্ঝ", "nch": "ঞ্ছ", "nffch": "ঞ্ছ",
-    "ttf": "ট্ট", "tftf": "ট্ট", "tfb": "ট্ব", "tfm": "ট্ম", "tfz": "ট্য", "tfr": "ট্র",
+    "ttf": "ট্ট", "tftf": "ট্ট", "tfb": "ট্ব", "tfm": "ट्म", "tfz": "ট্য", "tfr": "ট্র",
     "ddf": "ড্ড", "dfdf": "ড্ড", "dfb": "ড্ব", "dfz": "ড্য", "dfr": "ড্র", "rfg": "ড়্‌গ",
-    "dffz": "ঢ্য", "dfhz": "ঢ্য", "dffr": "ঢ্র", "dfhr": "ঢ্র",
+    "dffz": "ঢ্য", "dfhz": "ঢ্য", "dffr": "ঢ্র", "dfhr": "ढ्र",
     "nftf": "ণ্ট", "nftff": "ণ্ঠ", "nftfh": "ণ্ঠ", "nftffz": "ণ্ঠ্য", "nftfhz": "ণ্ঠ্য", "nfdf": "ণ্ড", "nfdfz": "ণ্ড্য", "nfdfr": "ণ্ড্র", "nfdff": "ণ্ঢ", "nfdfh": "ণ্ঢ", "nfnf": "ণ্ণ", "nfn": "ণ্ণ", "nfb": "ণ্ব", "nfm": "ণ্ম", "nfz": "ণ্য",
     "tt": "ত্ত", "ttb": "ত্ত্ব", "ttz": "ত্ত্য", "tth": "ত্থ", "tn": "ত্ন", "tb": "ত্ব", "tm": "ত্ম", "tmz": "ত্ম্য", "tz": "ত্য", "tr": "ত্র", "trz": "ত্র্য",
     "thb": "থ্ব", "thz": "থ্য", "thr": "থ্র",
@@ -82,7 +85,7 @@ JUKTOBORNO: Dict[str, str] = {
     "ptf": "প্ট", "pt": "প্ত", "pn": "প্ন", "pp": "প্প", "pz": "প্য", "pr": "প্র", "pl": "প্ল", "ps": "প্স",
     "phr": "ফ্র", "phl": "ফ্ল",
     "bj": "ব্জ", "bd": "ব্দ", "bdh": "ব্ধ", "bb": "ব্ব", "bz": "ব্য", "br": "ব্র", "bl": "ব্ল", "vb": "ভ্ব", "vz": "ভ্য", "vr": "ভ্র", "vl": "ভ্ল",
-    "mn": "ম্ন", "mp": "ম্প", "mpr": "ম্প্র", "mph": "ম্ফ", "mb": "ম্ব", "mbr": "ম্ব্র", "mv": "ম্ভ", "mvr": "ম্ভ্র", "mm": "ম্ম", "mz": "ম্য", "mr": "ম্র", "ml": "ম্ল",
+    "mn": "ম্ন", "mp": "ম্প", "mpr": "ম্প্র", "mph": "ম্ফ", "mb": "ম্ব", "mbr": "म्ब्र", "mv": "ম্ভ", "mvr": "ম্ভ্র", "mm": "ম্ম", "mz": "ম্য", "mr": "ম্র", "ml": "ম্ল",
     "zz": "য্য",
     "lk": "ল্ক", "lkz": "ল্ক্য", "lg": "ল্গ", "ltf": "ল্ট", "ldf": "ল্ড", "lp": "ল্প", "lph": "ল্ফ", "lb": "ল্ব", "lv": "ল্‌ভ", "lm": "ল্ম", "lz": "ল্য", "ll": "ল্ল",
     "shc": "শ্চ", "shch": "শ্ছ", "shn": "শ্ন", "shb": "শ্ব", "shm": "শ্ম", "shz": "শ্য", "shr": "শ্র", "shl": "শ্ল",
@@ -93,12 +96,12 @@ JUKTOBORNO: Dict[str, str] = {
     "hn": "হ্ন", "hnf": "হ্ণ", "hb": "হ্ব", "hm": "হ্ম", "hz": "হ্য", "hr": "হ্র", "hl": "হ্ল",
 
     # oshomvob juktoborno
-    "ksh": "কশ", "nsh": "নশ", "psh": "পশ", "ld": "লদ", "gd": "গদ", "ngkk": "ঙ্কক", "ngks": "ঙ্কস", "cn": "চন", "cnf": "চণ", "jn": "জন", "jnf": "জণ", "tft": "টত", "dfd": "ডদ",
+    "ksh": "কশ", "nsh": "নश", "psh": "পশ", "ld": "লদ", "gd": "গদ", "ngkk": "ঙ্কক", "ngks": "ঙ্কস", "cn": "চন", "cnf": "চণ", "jn": "জন", "jnf": "জণ", "tft": "টত", "dfd": "ডদ",
     "nft": "ণত", "nfd": "ণদ", "lt": "লত", "sft": "ষত", "nfth": "ণথ", "nfdh": "ণধ", "sfth": "ষথ",
-    "ktff": "কঠ", "ktfh": "কঠ", "ptff": "পঠ", "ptfh": "পঠ", "ltff": "লঠ", "ltfh": "লঠ", "stff": "সঠ", "stfh": "সঠ", "dfdff": "ডঢ", "dfdfh": "ডঢ", "ndff": "নঢ", "ndfh": "নঢ",
-    "ktfrf": "ক্টড়", "ktfrff": "ক্টঢ়", "kth": "কথ", "ktrf": "ক্তড়", "ktrff": "ক্তঢ়", "krf": "কড়", "krff": "কঢ়", "khrf": "খড়", "khrff": "খঢ়", "gggh": "জ্ঞঘ", "gdff": "গঢ", "gdfh": "গঢ", "gdhrf": "গ্ধড়",
+    "ktff": "কঠ", "ktfh": "কঠ", "ptff": "পঠ", "ptfh": "पঠ", "ltff": "लঠ", "ltfh": "লঠ", "stff": "सঠ", "stfh": "सঠ", "dfdff": "ডঢ", "dfdfh": "ডঢ", "ndff": "नढ", "ndfh": "नढ",
+    "ktfrf": "क्टড়", "ktfrff": "क्टঢ়", "kth": "कथ", "ktrf": "क्तড়", "ktrff": "क्तঢ়", "krf": "कড়", "krff": "कঢ়", "khrf": "खড়", "khrff": "खঢ়", "gggh": "ज्ञঘ", "gdff": "গঢ", "gdfh": "গঢ", "gdhrf": "গ্ধড়",
     "gdhrff": "গ্ধঢ়", "grf": "গড়", "grff": "গঢ়", "ghrf": "ঘড়", "ghrff": "ঘঢ়", "ngkth": "ঙ্কথ", "ngkrf": "ঙ্কড়", "ngkrff": "ঙ্কঢ়", "ngghrf": "ঙ্ঘড়", "ngghrff": "ঙ্ঘঢ়", "cchrf": "চ্ছড়", "cchrff": "চ্ছঢ়",
-    "tfrf": "টড়", "tfrff": "টঢ়", "dfrf": "ডড়", "dfrff": "ডঢ়", "rfgh": "ড়ঘ", "dffrf": "ঢড়", "dfhrf": "ঢড়", "dffrff": "ঢঢ়", "dfhrff": "ঢঢ়", "nfdfrf": "ণ্ডড়", "nfdfrff": "ণ্ডঢ়", "trf": "তড়", "trff": "তঢ়", "thrf": "থড়", "thrff": "থঢ়",
+    "tfrf": "টড়", "tfrff": "টঢ়", "dfrf": "ডড়", "dfrff": "ডঢ়", "rfgh": "ড়্‌ঘ", "dffrf": "ঢড়", "dfhrf": "ঢড়", "dffrff": "ঢঢ়", "dfhrff": "ঢঢ়", "nfdfrf": "ণ্ডড়", "nfdfrff": "ণ্ডঢ়", "trf": "তড়", "trff": "তঢ়", "thrf": "থড়", "thrff": "थढ়",
     "dvrf": "দ্ভড়", "dvrff": "দ্ভঢ়", "drf": "দড়", "drff": "দঢ়", "dhrf": "ধড়", "dhrff": "ধঢ়", "ntfrf": "ন্টড়", "ntfrff": "ন্টঢ়", "ndfrf": "ন্ডড়", "ndfrff": "ন্ডঢ়", "ntrf": "ন্তড়", "ntrff": "ন্তঢ়", "nthrf": "ন্থড়",
     "nthrff": "ন্থঢ়", "ndrf": "ন্দড়", "ndrff": "ন্দঢ়", "ndhrf": "ন্ধড়", "ndhrff": "ন্ধঢ়", "pth": "পথ", "pph": "পফ", "prf": "পড়", "prff": "পঢ়", "phrf": "ফড়", "phrff": "ফঢ়", "bjh": "বঝ", "brf": "বড়", "brff": "বঢ়",
     "vrf": "ভড়", "vrff": "ভঢ়", "mprf": "ম্পড়", "mprff": "ম্পঢ়", "mbrf": "ম্বড়", "mbrff": "ম্বঢ়", "mvrf": "ম্ভড়", "mvrff": "ম্ভঢ়", "mrf": "মড়", "mrff": "মঢ়", "lkh": "লখ", "lgh": "লঘ", "shrf": "শড়", "shrff": "শঢ়", "sfkh": "ষখ",
@@ -119,7 +122,7 @@ PHOLA: Dict[str, str] = {
 KAR: Dict[str, str] = {
     "o": "", "of": "অ",
     "a": "া", "af": "আ",
-    "i": "ি", "if": "ই",
+    "i": "ि", "if": "ই",
     "ii": "ী", "iif": "ঈ",
     "u": "ু", "uf": "উ",
     "uu": "ূ", "uuf": "ঊ",
@@ -137,15 +140,15 @@ KAR: Dict[str, str] = {
 
 ONGKO: Dict[str, str] = {
     ".1": ".১", ".2": ".২", ".3": ".৩", ".4": ".৪", ".5": ".৫", ".6": ".৬", ".7": ".৭", ".8": ".৮", ".9": ".৯", ".0": ".০",
-    "1": "১", "2": "২", "3": "৩", "4": "৪", "5": "৫", "6": "৬", "7": "৭", "8": "৮", "9": "৯", "0": "০",
+    "1": "১", "2": "২", "3": "৩", "4": "৪", "5": "५", "6": "৬", "7": "৭", "8": "৮", "9": "৯", "0": "০",
 }
 
 DIACRITIC: Dict[str, str] = {
-    "qq": "্", "xx": "্‌", "t/": "ৎ", "x": "ঃ", "ng": "ং", "/": "ঁ", "//": "/", "`": "‌", "``": "‍",
+    "qq": "্", "xx": "্‌", "t/": "ৎ", "x": "ঃ", "ng": "ং", "ngf": "ং", "/": "ঁ", "//": "/", "`": "‌", "``": "‍",
 }
 
 BIRAM: Dict[str, str] = {
-    ".": "।", "...": "...", "..": ".", "$": "৳", ",,,": ",,", ".f": "॥", ".ff": "৺",
+    ".": "।", "...": "...", "..": ".", "$": "৳", "$f": "₹", ",,,": ",,", ".f": "॥", ".ff": "৺", "+f": "×", "-f": "÷",
 }
 
 PRITHAYOK: Dict[str, str] = {
@@ -156,179 +159,319 @@ AE: Dict[str, str] = {
     "ae": "‍্যা",
 }
 
+# --------------------------
+# State machine configuration
+# --------------------------
 
+INIT = "init"
+SHOR_STATE = "shor-state"
+REPH_STATE = "reph-state"
+BYANJON_STATE = "byanjon-state"
 
 GROUP_MAPS: Dict[str, Dict[str, str]] = {
-    # "shor": SHOR,
-    # "byanjon": BYANJON,
-    # "juktoborno": JUKTOBORNO,
-    # "reph": REPH,
-    # "kar": KAR,
-    # "ongko": ONGKO,
-    # "diacritic": DIACRITIC,
-    # "biram": BIRAM,
-    # "prithayok": PRITHAYOK,
-    # "ae": AE,
+    "shor": SHOR,
+    "byanjon": BYANJON,
+    "juktoborno": JUKTOBORNO,
+    "reph": REPH,
+    "phola": PHOLA,
+    "kar": KAR,
+    "ongko": ONGKO,
+    "diacritic": DIACRITIC,
+    "biram": BIRAM,
+    "prithayok": PRITHAYOK,
+    "ae": AE,
 }
 
-STATE_GROUP_ORDER = {
-    "init": ["shor","byanjon","juktoborno","reph","kar","ongko","diacritic","biram","prithayok","ae"],
-    "shor-state": ["shor","diacritic","kar","ae"],
-    "byanjon-state": ["byanjon","juktoborno","kar","diacritic"],
-    "reph-state": ["reph","byanjon","juktoborno","kar","ae","prithayok"],
+# Group order per state (priority used when same-length matches)
+STATE_GROUP_ORDER: Dict[str, List[str]] = {
+    INIT: ["diacritic", "shor", "prithayok", "ongko", "biram", "reph", "juktoborno", "byanjon"],
+    SHOR_STATE: ["diacritic", "shor", "biram", "prithayok", "ongko", "reph", "juktoborno", "byanjon"],
+    REPH_STATE: ["prithayok", "ae", "juktoborno", "byanjon", "kar"],
+    BYANJON_STATE: ["diacritic", "prithayok", "ongko", "biram", "kar", "juktoborno", "phola", "byanjon"],
 }
 
-# Compute maximum key length per group dynamically
-MAXLEN_PER_GROUP = {g: max((len(k) for k in GROUP_MAPS.get(g, [""])), default=1) for g in GROUP_MAPS}
+# Precompute max key length per group for greedy matching
+MAXLEN_PER_GROUP: Dict[str, int] = {g: (max((len(k) for k in m.keys()), default=0)) for g, m in GROUP_MAPS.items()}
 
-last_converted_length = 0  # For optimized buffer replacement
-
-# --------------------------
-# Conversion functions
-# --------------------------
 
 def _find_longest(state: str, text: str, i: int) -> Tuple[str, str, str]:
-    allowed = STATE_GROUP_ORDER.get(state, [])
-    if not allowed:
-        return "", "", ""
-    maxlen = max(MAXLEN_PER_GROUP.get(g, 1) for g in allowed)
+    """Return (group, key, value) for the longest match allowed in current state. If none, return ("", "", "")."""
+    allowed = STATE_GROUP_ORDER[state]
+    # Determine the max lookahead we need
+    maxlen = 0
+    for g in allowed:
+        maxlen = max(maxlen, MAXLEN_PER_GROUP[g])
     end = min(len(text), i + maxlen)
+    best_group = ""
+    best_key = ""
+    best_val = ""
+    best_len = 0
+
+    # Try lengths from longest to shortest to implement greedy matching
     for L in range(end - i, 0, -1):
         chunk = text[i:i + L]
+        # Check groups by priority
         for g in allowed:
-            if chunk in GROUP_MAPS.get(g, {}):
-                return g, chunk, GROUP_MAPS[g][chunk]
-    return "", "", ""
+            m = GROUP_MAPS[g]
+            if chunk in m:
+                # First match at this length wins due to priority order
+                return (g, chunk, m[chunk])
+    return ("", "", "")
+
 
 def _apply_transition(state: str, group: str) -> str:
-    if state == "init":
-        if group in ("diacritic", "shor"): return "shor-state"
-        if group == "reph": return "reph-state"
-        if group in ("juktoborno", "byanjon"): return "byanjon-state"
-        return "init"
-    elif state == "shor-state":
-        if group in ("diacritic", "shor"): return "shor-state"
-        if group == "reph": return "reph-state"
-        if group in ("juktoborno", "byanjon"): return "byanjon-state"
-        return "init"
-    elif state == "reph-state":
-        if group == "prithayok": return "init"
-        if group == "ae": return "shor-state"
-        if group in ("juktoborno", "byanjon"): return "byanjon-state"
-        if group == "kar": return "shor-state"
-    elif state == "byanjon-state":
-        if group in ("diacritic", "kar"): return "shor-state"
-        if group in ("prithayok", "ongko", "biram"): return "init"
-        return "byanjon-state"
+    """Return the next state after consuming a token of 'group' in 'state'."""
+    if state == INIT:
+        if group == "diacritic":
+            return SHOR_STATE
+        if group == "shor":
+            return SHOR_STATE
+        if group in ("prithayok",):
+            return INIT
+        if group in ("ongko", "biram"):
+            return INIT
+        if group == "reph":
+            return REPH_STATE
+        if group in ("juktoborno", "byanjon"):
+            return BYANJON_STATE
+        return state
+
+    if state == SHOR_STATE:
+        if group in ("diacritic", "shor"):
+            return SHOR_STATE
+        if group in ("biram", "prithayok", "ongko"):
+            return INIT
+        if group == "reph":
+            return REPH_STATE
+        if group in ("juktoborno", "byanjon"):
+            return BYANJON_STATE
+        return state
+
+    if state == REPH_STATE:
+        if group == "prithayok":
+            return INIT
+        if group == "ae":
+            return SHOR_STATE
+        if group in ("juktoborno", "byanjon"):
+            return BYANJON_STATE
+        if group == "kar":
+            return SHOR_STATE
+        return state
+
+    if state == BYANJON_STATE:
+        if group in ("diacritic", "kar"):
+            return SHOR_STATE
+        if group in ("prithayok", "ongko", "biram"):
+            return INIT
+        # juktoborno, phola, byanjon keep BYANJON_STATE
+        return BYANJON_STATE
+
     return state
 
+
 def convert(text: str) -> str:
-    i, n, state, out = 0, len(text), "init", []
+    """Convert an ASCII input string to Bengali output using the bn-khipro state machine."""
+    i = 0
+    n = len(text)
+    state = INIT
+    out: List[str] = []
+
     while i < n:
         group, key, val = _find_longest(state, text, i)
         if not group:
+            # No mapping: pass through this char and reset to INIT
             out.append(text[i])
             i += 1
-            state = "init"
+            state = INIT
             continue
-        out.append(val)
+
+        # Special handling: PHOLA in BYANJON_STATE inserts virama before mapped char
+        if state == BYANJON_STATE and group == "phola":
+            out.append("্")
+            out.append(val)
+        else:
+            out.append(val)
+
         i += len(key)
         state = _apply_transition(state, group)
+
     return "".join(out)
 
-# =========================
-# IME logic
-# =========================
 
-bengali_mode = True
-buffer = ""
-commit_keys = {"enter", "tab"}
-icon = None
+# --------------------------
+# IME Implementation
+# --------------------------
 
-def create_icon(letter: str, color=(0, 0, 0)) -> Image.Image:
-    img = Image.new("RGB", (64, 64), (255, 255, 255))
-    d = ImageDraw.Draw(img)
-    try:
-        font_path = getattr(sys, "_MEIPASS", ".") + "/NotoSansBengali-Regular.ttf"
-        font = ImageFont.truetype(font_path, 36)
-    except:
-        font = ImageFont.load_default()
-    w, h = d.textsize(letter, font=font)
-    d.text(((64 - w) / 2, (64 - h) / 2), letter, fill=color, font=font)
-    return img
+class KhiproIME:
+    def __init__(self):
+        self.bengali_mode = False
+        self.buffer = ""
+        self.listener = None
+        self.tray_icon = None
+        self.setup_tray_icon()
+        
+    def setup_tray_icon(self):
+        """Create system tray icon with menu"""
+        # Create an image for the icon
+        image = Image.new('RGB', (64, 64), 'black')
+        dc = ImageDraw.Draw(image)
+        dc.rectangle((0, 0, 64, 64), fill='green' if self.bengali_mode else 'red')
+        dc.text((10, 10), "BN" if self.bengali_mode else "EN", fill='white')
+        
+        # Create menu
+        menu = pystray.Menu(
+            pystray.MenuItem('Toggle Bengali/English (F12)', self.toggle_mode),
+            pystray.MenuItem('Start on Boot', self.toggle_startup),
+            pystray.MenuItem('Exit', self.exit_app)
+        )
+        
+        self.tray_icon = pystray.Icon("khipro_ime", image, "Khipro IME", menu)
+        
+    def toggle_mode(self):
+        """Toggle between Bengali and English mode"""
+        self.bengali_mode = not self.bengali_mode
+        self.update_tray_icon()
+        
+    def update_tray_icon(self):
+        """Update the tray icon based on current mode"""
+        image = Image.new('RGB', (64, 64), 'black')
+        dc = ImageDraw.Draw(image)
+        dc.rectangle((0, 0, 64, 64), fill='green' if self.bengali_mode else 'red')
+        dc.text((10, 10), "BN" if self.bengali_mode else "EN", fill='white')
+        
+        if self.tray_icon:
+            self.tray_icon.icon = image
+            
+    def toggle_startup(self):
+        """Toggle whether to start on boot"""
+        try:
+            startup_dir = winshell.startup()
+            shortcut_path = os.path.join(startup_dir, "KhiproIME.lnk")
+            
+            if os.path.exists(shortcut_path):
+                os.remove(shortcut_path)
+                print("Removed from startup")
+            else:
+                # Create shortcut
+                target = sys.executable
+                wDir = os.path.dirname(sys.executable)
+                icon = sys.executable
+                
+                shell = Dispatch('WScript.Shell')
+                shortcut = shell.CreateShortCut(shortcut_path)
+                shortcut.Targetpath = target
+                shortcut.Arguments = f'"{sys.argv[0]}"'
+                shortcut.WorkingDirectory = wDir
+                shortcut.IconLocation = icon
+                shortcut.save()
+                print("Added to startup")
+        except Exception as e:
+            print(f"Error toggling startup: {e}")
+            
+    def exit_app(self):
+        """Exit the application"""
+        if self.listener:
+            self.listener.stop()
+        if self.tray_icon:
+            self.tray_icon.stop()
+        os._exit(0)
+        
+    def on_press(self, key):
+        """Handle key press events"""
+        try:
+            if key == keyboard.Key.f12:
+                self.toggle_mode()
+                return False  # Don't propagate F12
+                
+            if not self.bengali_mode:
+                return True  # Pass through if not in Bengali mode
+                
+            # Handle special keys
+            if key == keyboard.Key.space:
+                self.flush_buffer()
+                return True
+            elif key == keyboard.Key.backspace:
+                if self.buffer:
+                    self.buffer = self.buffer[:-1]
+                return True
+            elif key == keyboard.Key.enter:
+                self.flush_buffer()
+                return True
+                
+            # Handle character keys
+            if hasattr(key, 'char') and key.char:
+                self.buffer += key.char
+                converted = convert(self.buffer)
+                
+                # Simulate backspacing and typing the converted text
+                self.simulate_backspace(len(self.buffer))
+                self.simulate_type(converted)
+                
+                # If the conversion consumed the whole buffer, clear it
+                if converted:
+                    self.buffer = ""
+                    
+                return False  # Suppress the original key
+                
+        except Exception as e:
+            print(f"Error in key handler: {e}")
+            
+        return True
+        
+    def flush_buffer(self):
+        """Flush the current buffer"""
+        if self.buffer:
+            converted = convert(self.buffer)
+            self.simulate_backspace(len(self.buffer))
+            self.simulate_type(converted)
+            self.buffer = ""
+            
+    def simulate_backspace(self, count):
+        """Simulate pressing backspace count times"""
+        for _ in range(count):
+            win32api.keybd_event(win32con.VK_BACK, 0, 0, 0)
+            win32api.keybd_event(win32con.VK_BACK, 0, win32con.KEYEVENTF_KEYUP, 0)
+            time.sleep(0.01)
+            
+    def simulate_type(self, text):
+        """Simulate typing the given text"""
+        for char in text:
+            # We need to use the unicode version of keybd_event
+            win32api.keybd_event(0, 0, 0, 0)  # dummy call
+            # This is a simplified approach - might need more complex handling for all characters
+            for key_code in self.char_to_keycode(char):
+                win32api.keybd_event(key_code, 0, 0, 0)
+                win32api.keybd_event(key_code, 0, win32con.KEYEVENTF_KEYUP, 0)
+            time.sleep(0.01)
+            
+    def char_to_keycode(self, char):
+        """Convert a character to virtual key codes (simplified)"""
+        # This is a very simplified version - would need proper mapping
+        # For Bengali characters, we might need to use unicode input methods
+        try:
+            # Try to use the char directly
+            vk = win32api.VkKeyScan(char)
+            return [vk & 0xff]  # Return the virtual key code
+        except:
+            return []
+            
+    def start(self):
+        """Start the IME"""
+        # Start the tray icon in a separate thread
+        tray_thread = threading.Thread(target=self.tray_icon.run)
+        tray_thread.daemon = True
+        tray_thread.start()
+        
+        # Start the keyboard listener
+        with keyboard.Listener(on_press=self.on_press) as listener:
+            self.listener = listener
+            listener.join()
 
-def update_icon():
-    global icon
-    if icon:
-        if bengali_mode:
-            icon.icon = create_icon("ব", (0, 0, 255))
-            icon.title = "Khipro IME - Bengali Mode"
-        else:
-            icon.icon = create_icon("E", (255, 0, 0))
-            icon.title = "Khipro IME - English Mode"
 
-def toggle_mode():
-    global bengali_mode, buffer, last_converted_length
-    bengali_mode = not bengali_mode
-    buffer = ""
-    last_converted_length = 0
-    update_icon()
-
-def commit_buffer():
-    global buffer, last_converted_length
-    if buffer:
-        for _ in range(last_converted_length):
-            keyboard.send("backspace")
-        keyboard.write(convert(buffer))
-        buffer = ""
-        last_converted_length = 0
-
-def on_key(event):
-    global buffer, last_converted_length
-    if event.event_type != "down":
-        return
-    name = event.name
-    if name == "f12":
-        toggle_mode()
-        return
-    if not bengali_mode:
-        return
-    if name in commit_keys:
-        commit_buffer()
-        return
-    if name == "backspace":
-        if buffer:
-            buffer = buffer[:-1]
-            keyboard.send("backspace")
-            last_converted_length = max(last_converted_length - 1, 0)
-        return
-    if len(name) == 1:
-        buffer += name
-        converted = convert(buffer)
-        for _ in range(last_converted_length):
-            keyboard.send("backspace")
-        keyboard.write(converted)
-        last_converted_length = len(converted)
-
-# =========================
-# Tray icon thread
-# =========================
-
-def tray_thread():
-    global icon
-    menu = pystray.Menu(
-        pystray.MenuItem("Toggle (F12)", toggle_mode),
-        pystray.MenuItem("Exit", lambda: icon.stop())
-    )
-    icon = pystray.Icon("khipro-ime", create_icon("ব"), "Khipro IME - Bengali Mode", menu)
-    update_icon()
-    icon.run()
-
-# =========================
-# Main
-# =========================
+# --------------------------
+# Main application
+# --------------------------
 
 if __name__ == "__main__":
-    keyboard.hook(on_key)
-    threading.Thread(target=tray_thread, daemon=True).start()
-    keyboard.wait()
+    ime = KhiproIME()
+    ime.start()
