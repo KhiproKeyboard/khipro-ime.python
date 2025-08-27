@@ -2,7 +2,7 @@
 # Khipro Bengali IME for Windows
 
 This is an Input Method Editor (IME) that allows you to type in Bengali using the Khipro keyboard layout.
-
+![khipro-ime.python](https://socialify.git.ci/KhiproKeyboard/khipro-ime.python/image?description=1&forks=1&issues=1&language=1&logo=https%3A%2F%2Fraw.githubusercontent.com%2FSharafatKarim%2Fkhipro-m17n%2Fmain%2Fkhipro_logo.png&name=1&pattern=Circuit%20Board&pulls=1&stargazers=1&theme=Auto)
 ## Installation
 
 1. Download the latest release from [releases page]
